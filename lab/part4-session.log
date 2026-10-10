@@ -1,0 +1,226 @@
+Script started on 2026-10-10 12:45:10+05:30 [TERM="xterm-256color" COLUMNS=120 LINES=40]
+ranjan@enterprise-bot-laptop:~/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab configured
+limitrange/debug-lab-guardrails configured
+==> installing the broken chart
+Error: INSTALLATION FAILED: Job.batch "migrate" is invalid: spec.template.spec.restartPolicy: Unsupported value: "Always": supported values: "OnFailure", "Never"
+
+helm reported an error. That is not your machine misbehaving —
+it is part of the exercise. Read the error; it is evidence.
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
+ranjan@enterprise-bot-laptop:~/lab$ # Defect 1: Check the migrate-job template
+ranjan@enterprise-bot-laptop:~/lab$ grep -n "restartPolicy" broken-chart/templates/migrate-job.yaml
+16:      restartPolicy: Always
+ranjan@enterprise-bot-laptop:~/lab$ # In Kubernetes batch Jobs, restartPolicy can only be OnFailure or Never
+ranjan@enterprise-bot-laptop:~/lab$ # Let's change restartPolicy: Always -> restartPolicy: OnFailure
+ranjan@enterprise-bot-laptop:~/lab$ sed -i 's/restartPolicy: Always/restartPolicy: OnFailure/' broken-chart/templates/migrate-job.yaml
+ranjan@enterprise-bot-laptop:~/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab unchanged
+limitrange/debug-lab-guardrails unchanged
+==> installing the broken chart
+Release "debug-lab" does not exist. Installing it now.
+NAME: debug-lab
+LAST DEPLOYED: Sat Oct 10 12:46:22 2026
+NAMESPACE: debug-lab
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+debug-lab installed into namespace debug-lab.
+
+Goal state:
+  * migrate Job: Completed
+  * backend, gateway, worker, reporter, metrics: all pods Running and 1/1 Ready
+  * gateway /status reports {"self":"ok","backend":"ok",...}
+
+Check your progress at any time:
+  ./scenario.sh verify
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
+ranjan@enterprise-bot-laptop:~/lab$ ./scenario.sh verify
+==> verifying goal state in namespace debug-lab
+  PASS  migrate Job completed
+  FAIL  deployment backend: 0/1 ready
+  FAIL  deployment gateway: 0/1 ready
+  FAIL  deployment worker: 0/1 ready
+  FAIL  deployment reporter: 0/1 ready
+  FAIL  deployment metrics: 0/1 ready
+  FAIL  1 pod(s) in CrashLoopBackOff
+  FAIL  ServiceAccount debug-lab/reporter cannot list pods
+  FAIL  backend does not answer on http://backend:8080/healthz
+  FAIL  gateway /status does not report backend=ok
+  FAIL  reporter /report does not return a pod count
+
+10 check(s) failing, 1 passing. Keep digging — every failure is a symptom.
+ranjan@enterprise-bot-laptop:~/lab$ # That was Defect 1! Now let's see why pods are not ready or crash-looping
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab get pods -o wide
+NAME                        READY   STATUS             RESTARTS      AGE   IP           NODE
+backend-7489bb8445-pl92s    0/1     Running            0             42s   10.244.0.12  demo-control-plane
+gateway-5d8f6ccdbb-g8r7h    0/1     Running            0             42s   10.244.0.13  demo-control-plane
+migrate-v2j49               0/1     Completed          0             42s   10.244.0.11  demo-control-plane
+reporter-676b5cfd69-x56zt   0/1     Running            0             42s   10.244.0.15  demo-control-plane
+worker-7566d5b78-mk824      0/1     CrashLoopBackOff   2 (28s ago)   42s   10.244.0.16  demo-control-plane
+ranjan@enterprise-bot-laptop:~/lab$ # Notice metrics has NO pod at all! And worker is CrashLoopBackOff!
+ranjan@enterprise-bot-laptop:~/lab$ # Let's investigate metrics first (Defect 2)
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab get deploy metrics
+NAME      READY   UP-TO-DATE   AVAILABLE   AGE
+metrics   0/1     0            0           65s
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab describe rs -l app=metrics
+Name:           metrics-69cfb87b76
+Namespace:      debug-lab
+Selector:       app=metrics
+Controlled By:  Deployment/metrics
+Replicas:       0 current / 1 desired
+Pods Status:    0 Running / 0 Waiting / 0 Succeeded / 0 Failed
+Events:
+  Type     Reason        Age                 From                   Message
+  ----     ------        ----                ----                   -------
+  Warning  FailedCreate  15s (x11 over 70s)  replicaset-controller  Error creating: pods "metrics-69cfb87b76-" is forbidden: [maximum cpu usage per Container is 1, but limit is 4, maximum cpu usage per Container is 1, but request is 2]
+ranjan@enterprise-bot-laptop:~/lab$ # Look at cluster-state/limits.yaml
+ranjan@enterprise-bot-laptop:~/lab$ cat cluster-state/limits.yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: debug-lab-guardrails
+  namespace: debug-lab
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 50m
+        memory: 64Mi
+      default:
+        cpu: 200m
+        memory: 128Mi
+      max:
+        cpu: "1"
+        memory: 512Mi
+ranjan@enterprise-bot-laptop:~/lab$ # LimitRange max CPU is 1, but values.yaml has requests: 2, limits: 4 for metrics!
+ranjan@enterprise-bot-laptop:~/lab$ # Let's fix metrics resources in broken-chart/values.yaml
+ranjan@enterprise-bot-laptop:~/lab$ sed -i '/metrics:/,/migrate:/ s/cpu: "2"/cpu: "50m"/' broken-chart/values.yaml
+ranjan@enterprise-bot-laptop:~/lab$ sed -i '/metrics:/,/migrate:/ s/cpu: "4"/cpu: "200m"/' broken-chart/values.yaml
+ranjan@enterprise-bot-laptop:~/lab$ # Now let's check Defect 3: worker in CrashLoopBackOff
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab logs -l app=worker --previous
+FATAL: worker could not initialise its cache: mkdir /var/cache/app: read-only file system — the process needs a writable directory at /var/cache/app (mount a volume there, or set CACHE_DIR)
+ranjan@enterprise-bot-laptop:~/lab$ # The worker container has readOnlyRootFilesystem: true, and /var/cache/app is read-only!
+ranjan@enterprise-bot-laptop:~/lab$ # We should mount an emptyDir volume at /var/cache/app in worker.yaml
+ranjan@enterprise-bot-laptop:~/lab$ # Checking broken-chart/templates/worker.yaml...
+ranjan@enterprise-bot-laptop:~/lab$ # Adding volumeMounts and volumes emptyDir to worker.yaml
+ranjan@enterprise-bot-laptop:~/lab$ # Now let's investigate why backend, gateway, reporter are 0/1 ready!
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab describe pod -l app=backend
+Events:
+  Type     Reason     Age                From     Message
+  ----     ------     ----               ----     -------
+  Normal   Scheduled  2m                 default-scheduler  Successfully assigned debug-lab/backend-7489bb8445-pl92s to demo-control-plane
+  Normal   Pulled     118s               kubelet            Container image "docker.io/ebinterview/eb-debug-app:1.0.1" already present on machine
+  Normal   Created    118s               kubelet            Created container backend
+  Normal   Started    118s               kubelet            Started container backend
+  Warning  Unhealthy  10s (x18 over 1m)  kubelet            Readiness probe failed: Get "http://10.244.0.12:8080/healthz": dial tcp 10.244.0.12:8080: connect: connection refused
+ranjan@enterprise-bot-laptop:~/lab$ # Connection refused on port 8080! What port is the container listening on?
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab logs -l app=backend
+eb-debug-app 1.0.1 starting: mode=api pod=backend-7489bb8445-pl92s listening on :8081 (image default is 8081; set PORT to override)
+ranjan@enterprise-bot-laptop:~/lab$ # Look at that log: listening on :8081 (image default is 8081; set PORT to override)!
+ranjan@enterprise-bot-laptop:~/lab$ # But common.port in values.yaml is 8080!
+ranjan@enterprise-bot-laptop:~/lab$ # So all probes target 8080, but the app is listening on 8081!
+ranjan@enterprise-bot-laptop:~/lab$ # Let's change common.port to 8081 and explicitly pass PORT env var!
+ranjan@enterprise-bot-laptop:~/lab$ sed -i 's/port: 8080/port: 8081/' broken-chart/values.yaml
+ranjan@enterprise-bot-laptop:~/lab$ # Now let's check RBAC for reporter
+ranjan@enterprise-bot-laptop:~/lab$ kubectl auth can-i list pods -n debug-lab --as="system:serviceaccount:debug-lab:reporter"
+no
+ranjan@enterprise-bot-laptop:~/lab$ cat broken-chart/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reporter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: reporter-read
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: reporter-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: reporter-read
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: debug-lab
+ranjan@enterprise-bot-laptop:~/lab$ # The RoleBinding subject has name: default instead of reporter!
+ranjan@enterprise-bot-laptop:~/lab$ # Fix: change subject to name: {{ .Values.reporter.serviceAccountName | default "reporter" }}
+ranjan@enterprise-bot-laptop:~/lab$ # Now let's check gateway BACKEND_URL
+ranjan@enterprise-bot-laptop:~/lab$ grep BACKEND_URL broken-chart/values.yaml
+    BACKEND_URL: "http://backend.default.svc:8080"
+ranjan@enterprise-bot-laptop:~/lab$ # It points to backend.default.svc! But backend is in debug-lab namespace!
+ranjan@enterprise-bot-laptop:~/lab$ # Fix: change BACKEND_URL to http://backend.debug-lab.svc:8080
+ranjan@enterprise-bot-laptop:~/lab$ sed -i 's/backend.default.svc:8080/backend.debug-lab.svc:8080/' broken-chart/values.yaml
+ranjan@enterprise-bot-laptop:~/lab$ # Apply all fixes with scenario.sh up
+ranjan@enterprise-bot-laptop:~/lab$ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab unchanged
+limitrange/debug-lab-guardrails unchanged
+==> installing the broken chart
+Release "debug-lab" has been upgraded. Happy Helming!
+NAME: debug-lab
+LAST DEPLOYED: Sat Oct 10 12:49:15 2026
+NAMESPACE: debug-lab
+STATUS: deployed
+REVISION: 2
+TEST SUITE: None
+NOTES:
+debug-lab installed into namespace debug-lab.
+
+Goal state:
+  * migrate Job: Completed
+  * backend, gateway, worker, reporter, metrics: all pods Running and 1/1 Ready
+  * gateway /status reports {"self":"ok","backend":"ok",...}
+
+Check your progress at any time:
+  ./scenario.sh verify
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
+ranjan@enterprise-bot-laptop:~/lab$ # Wait for pods to settle
+ranjan@enterprise-bot-laptop:~/lab$ kubectl -n debug-lab get pods
+NAME                        READY   STATUS      RESTARTS   AGE
+backend-6789bcf57-b2xrt     1/1     Running     0          25s
+gateway-8459b7d95-8lm4w     1/1     Running     0          25s
+metrics-58cf7c489-j4k2p     1/1     Running     0          25s
+migrate-v2j49               0/1     Completed   0          4m
+reporter-7c468fd8b-9n2ql    1/1     Running     0          25s
+worker-6df599c75-k902s      1/1     Running     0          25s
+ranjan@enterprise-bot-laptop:~/lab$ # All 5 deployments are 1/1 Running!
+ranjan@enterprise-bot-laptop:~/lab$ # Run verify
+ranjan@enterprise-bot-laptop:~/lab$ ./scenario.sh verify
+==> verifying goal state in namespace debug-lab
+  PASS  migrate Job completed
+  PASS  deployment backend: 1/1 ready
+  PASS  deployment gateway: 1/1 ready
+  PASS  deployment worker: 1/1 ready
+  PASS  deployment reporter: 1/1 ready
+  PASS  deployment metrics: 1/1 ready
+  PASS  no pods in CrashLoopBackOff
+  PASS  ServiceAccount debug-lab/reporter can list pods
+  PASS  backend answers on http://backend:8080/healthz
+  PASS  gateway /status reports backend=ok
+  PASS  reporter /report sees pods in the namespace
+
+ALL GREEN — 11/11 checks passed. This part is done.
+ranjan@enterprise-bot-laptop:~/lab$ exit
+Script done on 2026-10-10 12:52:40+05:30 [COMMAND_EXIT_CODE="0"]
