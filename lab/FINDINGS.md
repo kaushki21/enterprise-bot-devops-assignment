@@ -8,6 +8,9 @@ Before you start investigating, begin recording:
 `script -q part4-session.log` (or `asciinema rec part4-session.cast`), and
 commit that file alongside this one.
 
+> [!NOTE]
+> **AI Usage Note:** Diagnostic path analysis and reverse-engineering of prebuilt binary strings and OCI layer blobs were assisted by AI tooling (Google Antigravity), cross-referenced with live cluster evidence and documented in the root `README.md`.
+
 ---
 
 ## Defect 1

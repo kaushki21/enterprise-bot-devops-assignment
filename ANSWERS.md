@@ -2,6 +2,9 @@
 
 ### Q1. Migrating ~40 Ingress Objects from `ingress-nginx` to Kubernetes Gateway API with Zero Downtime
 
+> [!NOTE]
+> **AI Usage Disclosure:** Architectural reasoning and risk sequencing were developed by the candidate and refined with AI assistance (Google Antigravity), in full alignment with the assignment's AI policy.
+
 #### Approach & Sequencing
 
 1. **Deploy Gateway API Infrastructure in Parallel:**

@@ -2,7 +2,21 @@
 
 This repository contains the end-to-end implementation for the Enterprise Bot GmbH DevOps / Platform Engineer assignment.
 
+> [!NOTE]
+> **AI Usage Disclosure (per Enterprise Bot AI Policy):**
+> AI assistance (Google Antigravity agentic assistant) was used to accelerate boilerplate scaffolding, OCI layer inspection, and hypothesis validation. See the full disclosure in the [How I Used AI](#how-i-used-ai) section below detailing tools used, workflows, and candidate corrections. All work is fully defended live.
+
 ---
+
+## Table of Contents
+- [Repository Structure](#repository-structure)
+- [How I Used AI (Mandatory Disclosure)](#how-i-used-ai)
+- [How to Run and Verify Your Work](#how-to-run-and-verify-your-work)
+  - [Part 3: One-Command Setup (`setup.sh`)](#part-3-one-command-setup)
+  - [Part 4: Debug the Lab (`lab/`)](#part-4-debug-the-lab)
+- [Resource Requests and Limits — Rationale](#resource-requests-and-limits--rationale)
+- [What Was Deliberately Skipped & Associated Risks](#what-was-deliberately-skipped--associated-risks)
+- [What Would Make This Production-Ready](#what-would-make-this-production-ready)
 
 ## Repository Structure
 
