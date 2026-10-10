@@ -1,0 +1,12 @@
+{
+  "name": "demo-service",
+  "version": "1.0.0",
+  "description": "Enterprise Bot DevOps Take-Home demo service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "author": "Kaushki Ranjan",
+  "license": "MIT"
+}
